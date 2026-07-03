@@ -11,11 +11,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/sohanreddy/helmsman/internal/balancer"
-	"github.com/sohanreddy/helmsman/internal/cache"
-	"github.com/sohanreddy/helmsman/internal/metrics"
-	"github.com/sohanreddy/helmsman/internal/proxy"
-	"github.com/sohanreddy/helmsman/internal/registry"
+	"github.com/sohanreddyk/helmsman/internal/balancer"
+	"github.com/sohanreddyk/helmsman/internal/cache"
+	"github.com/sohanreddyk/helmsman/internal/metrics"
+	"github.com/sohanreddyk/helmsman/internal/proxy"
+	"github.com/sohanreddyk/helmsman/internal/registry"
 )
 
 const maxRetries = 3

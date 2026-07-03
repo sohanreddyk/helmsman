@@ -1,4 +1,4 @@
-module github.com/sohanreddy/helmsman
+module github.com/sohanreddyk/helmsman
 
 go 1.24
 

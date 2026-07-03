@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sohanreddy/helmsman/internal/metrics"
-	"github.com/sohanreddy/helmsman/internal/ratelimit"
+	"github.com/sohanreddyk/helmsman/internal/metrics"
+	"github.com/sohanreddyk/helmsman/internal/ratelimit"
 )
 
 type ctxKey string

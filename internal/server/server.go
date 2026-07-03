@@ -9,13 +9,13 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
-	"github.com/sohanreddy/helmsman/internal/balancer"
-	"github.com/sohanreddy/helmsman/internal/cache"
-	"github.com/sohanreddy/helmsman/internal/config"
-	"github.com/sohanreddy/helmsman/internal/proxy"
-	"github.com/sohanreddy/helmsman/internal/queue"
-	"github.com/sohanreddy/helmsman/internal/ratelimit"
-	"github.com/sohanreddy/helmsman/internal/registry"
+	"github.com/sohanreddyk/helmsman/internal/balancer"
+	"github.com/sohanreddyk/helmsman/internal/cache"
+	"github.com/sohanreddyk/helmsman/internal/config"
+	"github.com/sohanreddyk/helmsman/internal/proxy"
+	"github.com/sohanreddyk/helmsman/internal/queue"
+	"github.com/sohanreddyk/helmsman/internal/ratelimit"
+	"github.com/sohanreddyk/helmsman/internal/registry"
 )
 
 type Server struct {

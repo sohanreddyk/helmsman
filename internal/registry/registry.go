@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sohanreddy/helmsman/internal/resilience"
+	"github.com/sohanreddyk/helmsman/internal/resilience"
 )
 
 type Backend struct {

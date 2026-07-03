@@ -4,7 +4,7 @@ import (
 	"errors"
 	"sync/atomic"
 
-	"github.com/sohanreddy/helmsman/internal/registry"
+	"github.com/sohanreddyk/helmsman/internal/registry"
 )
 
 var ErrNoHealthyBackend = errors.New("no healthy backend available")

@@ -3,8 +3,8 @@ package balancer
 import (
 	"testing"
 
-	"github.com/sohanreddy/helmsman/internal/registry"
-	"github.com/sohanreddy/helmsman/internal/resilience"
+	"github.com/sohanreddyk/helmsman/internal/registry"
+	"github.com/sohanreddyk/helmsman/internal/resilience"
 	"time"
 )
 
