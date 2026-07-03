@@ -1,4 +1,4 @@
-.PHONY: run build test tidy fmt vet clean
+.PHONY: run build test tidy fmt vet clean kill
 
 run:
 	go run ./cmd/gateway
@@ -20,3 +20,8 @@ vet:
 
 clean:
 	rm -rf bin
+
+kill:
+	-lsof -ti :8080 | xargs kill -9 2>/dev/null || true
+
+restart: kill run

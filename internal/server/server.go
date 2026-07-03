@@ -11,6 +11,7 @@ import (
 	"github.com/sohanreddy/helmsman/internal/balancer"
 	"github.com/sohanreddy/helmsman/internal/config"
 	"github.com/sohanreddy/helmsman/internal/proxy"
+	"github.com/sohanreddy/helmsman/internal/queue"
 	"github.com/sohanreddy/helmsman/internal/ratelimit"
 	"github.com/sohanreddy/helmsman/internal/registry"
 )
@@ -30,6 +31,7 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 	log.Info("redis connected", "addr", cfg.RedisAddr)
 
 	limiter := ratelimit.New(rdb, cfg.RatePerSec, cfg.RateBurst)
+	sem := queue.New(cfg.MaxConcurrent)
 	reg := registry.New(cfg.BackendURLs, log)
 	bal := &balancer.RoundRobin{}
 	h := NewHandlers(reg, bal, proxy.New(), log)
@@ -39,11 +41,15 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 	mux.HandleFunc("GET /readyz", h.Readyz)
 	mux.HandleFunc("POST /v1/chat/completions", h.ChatCompletions)
 
+	// Middleware order (outermost → innermost):
+	// recover → requestID → auth → ratelimit → queue → logging → handler
+	// Queue sits inside rate limit: a rejected request doesn't consume a slot.
 	handler := chain(mux,
 		RecoverMiddleware(log),
 		RequestIDMiddleware,
 		AuthMiddleware,
 		RateLimitMiddleware(limiter, log),
+		sem.Middleware,
 		LoggingMiddleware(log),
 	)
 

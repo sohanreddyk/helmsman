@@ -16,6 +16,7 @@ type Config struct {
 	RedisAddr     string
 	RatePerSec    int
 	RateBurst     int
+	MaxConcurrent int
 }
 
 func Load() Config {
@@ -27,8 +28,9 @@ func Load() Config {
 		WriteTimeout:  0,
 		IdleTimeout:   60 * time.Second,
 		RedisAddr:     getenv("HELMSMAN_REDIS_ADDR", "localhost:6379"),
-		RatePerSec:    5,  // 5 requests/sec per key
-		RateBurst:     10, // burst up to 10
+		RatePerSec:    5,
+		RateBurst:     10,
+		MaxConcurrent: 10,
 	}
 }
 
