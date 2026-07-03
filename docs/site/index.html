@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Helmsman — Distributed LLM Inference Gateway</title>
+  <meta name="description" content="Self-hosted, OpenAI-compatible LLM inference gateway with semantic caching, circuit breaking, rate limiting, and Kubernetes deployment." />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0a0c13;
+      --surface:  #12151f;
+      --border:   #1e2235;
+      --muted:    #4a5180;
+      --text:     #c8d0e8;
+      --bright:   #eef0f8;
+      --accent:   #6366f1;
+      --accent2:  #22d3ee;
+      --green:    #34d399;
+      --red:      #f87171;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      line-height: 1.6;
+    }
+
+    a { color: var(--accent2); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Nav ── */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(10,12,19,0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 2rem; height: 56px;
+    }
+    .nav-logo { font-weight: 700; font-size: 1.1rem; color: var(--bright); letter-spacing: -0.02em; }
+    .nav-logo span { color: var(--accent); }
+    .nav-links { display: flex; gap: 2rem; font-size: 0.875rem; color: var(--muted); }
+    .nav-links a { color: var(--muted); }
+    .nav-links a:hover { color: var(--bright); text-decoration: none; }
+    .nav-cta {
+      background: var(--accent); color: #fff; font-size: 0.8rem; font-weight: 600;
+      padding: 0.4rem 1rem; border-radius: 6px; letter-spacing: 0.01em;
+    }
+    .nav-cta:hover { background: #4f46e5; text-decoration: none; }
+
+    /* ── Layout ── */
+    section { padding: 5rem 2rem; max-width: 1000px; margin: 0 auto; }
+
+    /* ── Hero ── */
+    .hero { text-align: center; padding: 7rem 2rem 5rem; }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      background: rgba(99,102,241,0.12); border: 1px solid rgba(99,102,241,0.3);
+      color: #a5b4fc; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.05em;
+      padding: 0.3rem 0.8rem; border-radius: 99px; margin-bottom: 1.5rem;
+      text-transform: uppercase;
+    }
+    .hero h1 {
+      font-size: clamp(2.2rem, 5vw, 3.5rem);
+      font-weight: 800; color: var(--bright);
+      letter-spacing: -0.03em; line-height: 1.15;
+      margin-bottom: 1.25rem;
+    }
+    .hero h1 span { color: var(--accent); }
+    .hero p {
+      font-size: 1.125rem; color: var(--muted);
+      max-width: 580px; margin: 0 auto 2.5rem;
+    }
+    .hero-actions { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+    .btn-primary {
+      background: var(--accent); color: #fff; font-weight: 600;
+      padding: 0.75rem 1.75rem; border-radius: 8px; font-size: 0.9rem;
+      transition: background 0.15s;
+    }
+    .btn-primary:hover { background: #4f46e5; text-decoration: none; }
+    .btn-secondary {
+      background: var(--surface); color: var(--bright); font-weight: 600;
+      border: 1px solid var(--border); padding: 0.75rem 1.75rem;
+      border-radius: 8px; font-size: 0.9rem; transition: border-color 0.15s;
+    }
+    .btn-secondary:hover { border-color: var(--muted); text-decoration: none; }
+
+    /* ── Code block ── */
+    .code-block {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 1.5rem; margin-top: 3rem;
+      text-align: left; overflow-x: auto; max-width: 640px; margin-left: auto; margin-right: auto;
+    }
+    .code-block pre { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.82rem; line-height: 1.7; color: var(--text); }
+    .c-comment { color: var(--muted); }
+    .c-key { color: #a5b4fc; }
+    .c-val { color: var(--accent2); }
+    .c-str { color: var(--green); }
+
+    /* ── Stats strip ── */
+    .stats-strip {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1px; background: var(--border);
+      border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+      margin: 0 auto; max-width: 1000px;
+    }
+    .stat-cell {
+      background: var(--surface); padding: 1.75rem 1.5rem; text-align: center;
+    }
+    .stat-cell .num { font-size: 2rem; font-weight: 800; color: var(--bright); letter-spacing: -0.03em; }
+    .stat-cell .num span { color: var(--accent); }
+    .stat-cell .lbl { font-size: 0.75rem; color: var(--muted); margin-top: 0.25rem; text-transform: uppercase; letter-spacing: 0.05em; }
+
+    /* ── Features ── */
+    .features-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem;
+    }
+    .feature-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 1.5rem;
+      transition: border-color 0.15s;
+    }
+    .feature-card:hover { border-color: var(--accent); }
+    .feature-icon { font-size: 1.5rem; margin-bottom: 0.75rem; }
+    .feature-card h3 { font-size: 0.95rem; font-weight: 700; color: var(--bright); margin-bottom: 0.4rem; }
+    .feature-card p { font-size: 0.85rem; color: var(--muted); line-height: 1.6; }
+
+    /* ── Architecture diagram ── */
+    .arch-diagram {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 2rem; overflow-x: auto;
+    }
+    .arch-diagram pre {
+      font-family: 'JetBrains Mono', monospace; font-size: 0.8rem;
+      line-height: 1.8; color: var(--text);
+    }
+
+    /* ── Benchmark table ── */
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+    th {
+      text-align: left; color: var(--muted); font-weight: 600;
+      font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;
+      padding: 0.75rem 1rem; border-bottom: 1px solid var(--border);
+    }
+    td { padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); color: var(--text); }
+    tr:last-child td { border-bottom: none; }
+    .highlight-cell { color: var(--green); font-weight: 700; }
+    .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+
+    /* ── Section headings ── */
+    .section-label {
+      font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--accent); margin-bottom: 0.75rem;
+    }
+    .section-title {
+      font-size: clamp(1.5rem, 3vw, 2rem); font-weight: 800;
+      color: var(--bright); letter-spacing: -0.02em; margin-bottom: 0.75rem;
+    }
+    .section-sub { color: var(--muted); font-size: 1rem; margin-bottom: 2.5rem; max-width: 560px; }
+
+    /* ── Stack chips ── */
+    .chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.5rem; }
+    .chip {
+      background: rgba(99,102,241,0.1); border: 1px solid rgba(99,102,241,0.25);
+      color: #a5b4fc; font-size: 0.75rem; font-weight: 600;
+      padding: 0.3rem 0.75rem; border-radius: 99px;
+    }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      text-align: center; padding: 2.5rem 2rem;
+      font-size: 0.8rem; color: var(--muted);
+    }
+    footer a { color: var(--muted); }
+    footer a:hover { color: var(--bright); text-decoration: none; }
+  </style>
+</head>
+<body>
+
+<!-- Nav -->
+<nav>
+  <span class="nav-logo">⚓ Helms<span>man</span></span>
+  <div class="nav-links">
+    <a href="#features">Features</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#benchmarks">Benchmarks</a>
+    <a href="#quickstart">Quick start</a>
+  </div>
+  <a class="nav-cta" href="https://github.com/sohanreddy/helmsman" target="_blank">View on GitHub →</a>
+</nav>
+
+<!-- Hero -->
+<div class="hero">
+  <div class="hero-badge">⚡ Open source · Built in Go</div>
+  <h1>Distributed <span>LLM Inference</span><br/>Gateway</h1>
+  <p>Self-hosted, OpenAI-compatible gateway with semantic caching, circuit breaking, per-key rate limiting, and Kubernetes deployment — built from scratch in Go.</p>
+  <div class="hero-actions">
+    <a class="btn-primary" href="https://github.com/sohanreddy/helmsman" target="_blank">View on GitHub</a>
+    <a class="btn-secondary" href="#quickstart">Quick start</a>
+  </div>
+
+  <div class="code-block">
+    <pre><span class="c-comment"># Drop-in replacement for the OpenAI API</span>
+<span class="c-key">curl</span> <span class="c-val">localhost:8080/v1/chat/completions</span> \
+  -H <span class="c-str">"Authorization: Bearer mykey"</span> \
+  -d <span class="c-str">'{"model":"llama3.2:1b","messages":[...]}'</span>
+
+<span class="c-comment"># Second identical request → cache HIT, 0.2ms</span>
+<span class="c-key">X-Cache</span>: <span class="c-val">HIT</span></pre>
+  </div>
+</div>
+
+<!-- Stats strip -->
+<div style="padding: 0 2rem; max-width:1000px; margin: 0 auto;">
+  <div class="stats-strip">
+    <div class="stat-cell">
+      <div class="num">0.2<span>ms</span></div>
+      <div class="lbl">Cache hit p50</div>
+    </div>
+    <div class="stat-cell">
+      <div class="num">594<span>/s</span></div>
+      <div class="lbl">Warm throughput</div>
+    </div>
+    <div class="stat-cell">
+      <div class="num">17<span>×</span></div>
+      <div class="lbl">Latency reduction</div>
+    </div>
+    <div class="stat-cell">
+      <div class="num">9</div>
+      <div class="lbl">Build phases</div>
+    </div>
+    <div class="stat-cell">
+      <div class="num">0</div>
+      <div class="lbl">External dependencies*</div>
+    </div>
+  </div>
+  <p style="text-align:center; font-size:0.7rem; color:var(--muted); margin-top:0.5rem;">* circuit breaker and load balancer implemented from scratch · Redis/Prometheus are infrastructure, not deps</p>
+</div>
+
+<!-- Features -->
+<section id="features">
+  <div class="section-label">Features</div>
+  <div class="section-title">Everything a production gateway needs</div>
+  <p class="section-sub">Built phase by phase, each layer with a clear distributed systems reason for its position in the stack.</p>
+
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="feature-icon">🔀</div>
+      <h3>OpenAI-compatible routing</h3>
+      <p>Drop-in replacement for the OpenAI API. Any SDK that speaks <code>/v1/chat/completions</code> works out of the box.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🧠</div>
+      <h3>Semantic cache</h3>
+      <p>Embeds prompts with <code>nomic-embed-text</code> and matches near-duplicates by cosine similarity (≥0.95). Cache hits return in 0.2ms.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">⚖️</div>
+      <h3>Load balancing</h3>
+      <p>Round-robin across healthy backends using a lock-free atomic counter. Dead backends isolated within 5 seconds via health probes.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🔒</div>
+      <h3>Rate limiting</h3>
+      <p>Per-API-key token bucket implemented as a Redis Lua script — atomic across gateway replicas in a single round-trip.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">⚡</div>
+      <h3>Circuit breakers</h3>
+      <p>Per-backend Closed→Open→Half-Open state machine. 3 failures trips the breaker, fast-rejecting for 30s before probing recovery.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🛡️</div>
+      <h3>Backpressure</h3>
+      <p>Bounded concurrency semaphore. When full, new requests get a 503 instantly — keeping p99 predictable under overload.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">📊</div>
+      <h3>Prometheus + Grafana</h3>
+      <p>Latency histograms, cache hit rate, backend health gauges, circuit breaker state, and RPS — all scraped at <code>/metrics</code>.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">☸️</div>
+      <h3>Kubernetes ready</h3>
+      <p>Multi-stage Docker build, K8s manifests, HPA (2→5 replicas), liveness and readiness probes wired to backend health.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🖥️</div>
+      <h3>Live dashboard</h3>
+      <p>Vanilla React dashboard polling <code>/stats</code> every 2s — backend health, cache hit rate, RPS sparkline, circuit breaker state.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Architecture -->
+<section id="architecture">
+  <div class="section-label">Architecture</div>
+  <div class="section-title">Request lifecycle</div>
+  <p class="section-sub">Every layer has a defensible reason for its position. Rate limit sits outside the queue — a rejected request never occupies a slot.</p>
+
+  <div class="arch-diagram">
+    <pre>
+Client  POST /v1/chat/completions
+  │
+  ▼
+recover → requestID → auth → rate limit → semaphore → logging
+  │
+  ▼
+Semantic cache  ──  embed prompt (nomic-embed-text, 768-dim)
+  │                 cosine similarity ≥ 0.95  →  HIT (0.2ms)
+  │ miss
+  ▼
+Round-robin load balancer  (healthy backends only, atomic counter)
+  │
+  ▼
+Circuit breaker  Closed / Open / Half-Open  per backend
+  │              exponential backoff + jitter retry on different backend
+  ▼
+Ollama backends  ×N
+  │
+  ▼
+Async cache store  (context.Background() — detached from request)
+    </pre>
+  </div>
+
+  <div class="chips">
+    <span class="chip">Go 1.24</span>
+    <span class="chip">net/http</span>
+    <span class="chip">Redis 7</span>
+    <span class="chip">Ollama</span>
+    <span class="chip">nomic-embed-text</span>
+    <span class="chip">Prometheus</span>
+    <span class="chip">Grafana</span>
+    <span class="chip">Docker</span>
+    <span class="chip">Kubernetes</span>
+    <span class="chip">HPA</span>
+  </div>
+</section>
+
+<!-- Benchmarks -->
+<section id="benchmarks">
+  <div class="section-label">Benchmarks</div>
+  <div class="section-title">Measured on MacBook Air M-series</div>
+  <p class="section-sub">Single Ollama backend running <code>llama3.2:1b</code>, Redis 7 on Docker, load tested with <code>hey</code>.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Scenario</th>
+          <th>p50</th>
+          <th>p90</th>
+          <th>p95</th>
+          <th>RPS</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Cache MISS — cold, Ollama inference</td>
+          <td>32ms</td>
+          <td>40ms</td>
+          <td>104ms</td>
+          <td>34</td>
+        </tr>
+        <tr>
+          <td>Cache HIT — warm, served from Redis</td>
+          <td class="highlight-cell">0.2ms</td>
+          <td class="highlight-cell">70ms</td>
+          <td class="highlight-cell">127ms</td>
+          <td class="highlight-cell">594</td>
+        </tr>
+        <tr>
+          <td>Improvement</td>
+          <td class="highlight-cell">160×</td>
+          <td>—</td>
+          <td>—</td>
+          <td class="highlight-cell">17×</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Quick start -->
+<section id="quickstart">
+  <div class="section-label">Quick start</div>
+  <div class="section-title">Up in 3 commands</div>
+  <p class="section-sub">Requires Go 1.22+, Ollama, and Docker.</p>
+
+  <div class="code-block" style="max-width:100%">
+    <pre><span class="c-comment"># 1. Pull models</span>
+<span class="c-key">ollama</span> pull llama3.2:1b
+<span class="c-key">ollama</span> pull nomic-embed-text
+
+<span class="c-comment"># 2. Start Redis</span>
+<span class="c-key">docker</span> run -d --name helmsman-redis -p 6379:6379 redis:7-alpine
+
+<span class="c-comment"># 3. Run the gateway</span>
+<span class="c-key">make</span> run
+
+<span class="c-comment"># Optional: live dashboard</span>
+<span class="c-key">make</span> dashboard   <span class="c-comment"># → http://localhost:8081</span>
+
+<span class="c-comment"># Optional: Kubernetes</span>
+<span class="c-key">make</span> docker-build k8s-up k8s-status</pre>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer>
+  <p>Built by <a href="https://github.com/sohanreddy" target="_blank">Sohan Reddy</a> · <a href="https://github.com/sohanreddy/helmsman" target="_blank">GitHub</a> · MIT License</p>
+  <p style="margin-top:0.5rem;">MS Computer Science · Northeastern University · AI + Distributed Systems</p>
+</footer>
+
+</body>
+</html>

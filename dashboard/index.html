@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Helmsman Dashboard</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #0f1117; color: #e2e8f0; font-family: 'Inter', monospace; }
+    .card { background: #1a1d27; border: 1px solid #2d3148; }
+    .pulse-dot { animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    const GATEWAY = 'http://localhost:8080';
+    const POLL_MS = 2000;
+
+    function parsePrometheusMetric(text, name) {
+      const lines = text.split('\n');
+      let total = 0;
+      for (const line of lines) {
+        if (line.startsWith(name) && !line.startsWith('#')) {
+          const val = parseFloat(line.split(' ').pop());
+          if (!isNaN(val)) total += val;
+        }
+      }
+      return total;
+    }
+
+    function StatCard({ label, value, sub, color = 'text-white' }) {
+      return (
+        <div className="card rounded-xl p-5 flex flex-col gap-1">
+          <span className="text-xs text-slate-400 uppercase tracking-widest">{label}</span>
+          <span className={`text-3xl font-bold ${color}`}>{value}</span>
+          {sub && <span className="text-xs text-slate-500">{sub}</span>}
+        </div>
+      );
+    }
+
+    function BackendRow({ backend }) {
+      const isHealthy = backend.healthy;
+      const breakerColor = {
+        closed: 'text-emerald-400',
+        open: 'text-red-400',
+        'half-open': 'text-yellow-400',
+      }[backend.breaker] || 'text-slate-400';
+
+      return (
+        <div className="flex items-center justify-between py-3 border-b border-slate-800 last:border-0">
+          <div className="flex items-center gap-3">
+            <span className={`w-2 h-2 rounded-full pulse-dot ${isHealthy ? 'bg-emerald-400' : 'bg-red-500'}`} />
+            <span className="text-sm font-mono text-slate-200">{backend.url}</span>
+          </div>
+          <div className="flex items-center gap-6">
+            <span className={`text-xs font-semibold uppercase ${isHealthy ? 'text-emerald-400' : 'text-red-400'}`}>
+              {isHealthy ? 'healthy' : 'unhealthy'}
+            </span>
+            <span className={`text-xs font-mono ${breakerColor}`}>
+              ⚡ {backend.breaker}
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    function Sparkline({ data, color = '#6366f1' }) {
+      if (data.length < 2) return null;
+      const max = Math.max(...data, 1);
+      const w = 120, h = 32;
+      const pts = data.map((v, i) =>
+        `${(i / (data.length - 1)) * w},${h - (v / max) * h}`
+      ).join(' ');
+      return (
+        <svg width={w} height={h} className="opacity-80">
+          <polyline points={pts} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" />
+        </svg>
+      );
+    }
+
+    function App() {
+      const [stats, setStats] = useState(null);
+      const [metrics, setMetrics] = useState({});
+      const [error, setError] = useState(null);
+      const [tick, setTick] = useState(0);
+      const rpsHistory = useRef([]);
+      const prevRequests = useRef(null);
+
+      useEffect(() => {
+        async function fetchAll() {
+          try {
+            const [statsRes, metricsRes] = await Promise.all([
+              fetch(`${GATEWAY}/stats`),
+              fetch(`${GATEWAY}/metrics`),
+            ]);
+            const statsJson = await statsRes.json();
+            const metricsText = await metricsRes.text();
+
+            const totalReq = parsePrometheusMetric(metricsText, 'helmsman_requests_total');
+            const hits    = parsePrometheusMetric(metricsText, 'helmsman_cache_hits_total');
+            const misses  = parsePrometheusMetric(metricsText, 'helmsman_cache_misses_total');
+            const rl      = parsePrometheusMetric(metricsText, 'helmsman_rate_limit_rejections_total');
+            const bp      = parsePrometheusMetric(metricsText, 'helmsman_backpressure_rejections_total');
+            const inflight= parsePrometheusMetric(metricsText, 'helmsman_inflight_requests');
+
+            // RPS: delta requests / poll interval
+            const rps = prevRequests.current !== null
+              ? Math.max(0, (totalReq - prevRequests.current) / (POLL_MS / 1000))
+              : 0;
+            prevRequests.current = totalReq;
+            rpsHistory.current = [...rpsHistory.current.slice(-29), rps];
+
+            const hitRate = (hits + misses) > 0
+              ? ((hits / (hits + misses)) * 100).toFixed(1)
+              : '0.0';
+
+            setStats(statsJson);
+            setMetrics({ totalReq, hits, misses, hitRate, rl, bp, inflight, rps: rps.toFixed(1) });
+            setError(null);
+          } catch (e) {
+            setError('Cannot reach gateway at ' + GATEWAY);
+          }
+          setTick(t => t + 1);
+        }
+        fetchAll();
+        const id = setInterval(fetchAll, POLL_MS);
+        return () => clearInterval(id);
+      }, []);
+
+      return (
+        <div className="min-h-screen p-6 max-w-5xl mx-auto">
+          {/* Header */}
+          <div className="flex items-center justify-between mb-8">
+            <div>
+              <h1 className="text-2xl font-bold text-white tracking-tight">⚓ Helmsman</h1>
+              <p className="text-xs text-slate-500 mt-0.5">LLM Inference Gateway · live dashboard</p>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-slate-400">
+              {error
+                ? <span className="text-red-400">⚠ {error}</span>
+                : <><span className="w-2 h-2 rounded-full bg-emerald-400 pulse-dot inline-block" /> connected</>
+              }
+            </div>
+          </div>
+
+          {/* Stat cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <StatCard
+              label="Requests / sec"
+              value={metrics.rps ?? '—'}
+              sub={<Sparkline data={rpsHistory.current} color="#6366f1" />}
+              color="text-indigo-400"
+            />
+            <StatCard
+              label="Cache hit rate"
+              value={metrics.hitRate ? `${metrics.hitRate}%` : '—'}
+              sub={`${metrics.hits ?? 0} hits · ${metrics.misses ?? 0} misses`}
+              color={parseFloat(metrics.hitRate) > 50 ? 'text-emerald-400' : 'text-yellow-400'}
+            />
+            <StatCard
+              label="In-flight"
+              value={metrics.inflight ?? '—'}
+              sub="concurrent requests"
+              color="text-cyan-400"
+            />
+            <StatCard
+              label="Rejected"
+              value={(metrics.rl ?? 0) + (metrics.bp ?? 0)}
+              sub={`${metrics.rl ?? 0} rate-limited · ${metrics.bp ?? 0} overloaded`}
+              color="text-rose-400"
+            />
+          </div>
+
+          {/* Backends */}
+          <div className="card rounded-xl p-5 mb-6">
+            <h2 className="text-xs text-slate-400 uppercase tracking-widest mb-4">Backends</h2>
+            {stats?.backends?.length
+              ? stats.backends.map(b => <BackendRow key={b.url} backend={b} />)
+              : <span className="text-slate-600 text-sm">No backends registered</span>
+            }
+          </div>
+
+          {/* Totals */}
+          <div className="card rounded-xl p-5">
+            <h2 className="text-xs text-slate-400 uppercase tracking-widest mb-4">Lifetime totals</h2>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+              {[
+                { label: 'Total requests', value: metrics.totalReq ?? 0 },
+                { label: 'Cache hits', value: metrics.hits ?? 0 },
+                { label: 'Cache misses', value: metrics.misses ?? 0 },
+                { label: 'Rate limited', value: metrics.rl ?? 0 },
+                { label: 'Backpressure drops', value: metrics.bp ?? 0 },
+              ].map(({ label, value }) => (
+                <div key={label} className="flex flex-col gap-0.5">
+                  <span className="text-xs text-slate-500">{label}</span>
+                  <span className="text-lg font-semibold text-slate-200">{value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <p className="text-center text-xs text-slate-700 mt-8">
+            refreshes every {POLL_MS / 1000}s · data from /stats + /metrics
+          </p>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

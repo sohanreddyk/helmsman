@@ -1,4 +1,4 @@
-.PHONY: run build test tidy fmt vet clean kill restart docker-build k8s-up k8s-down k8s-status
+.PHONY: run build test tidy fmt vet clean kill restart docker-build k8s-up k8s-down k8s-status dashboard
 
 run:
 	go run ./cmd/gateway
@@ -7,7 +7,7 @@ build:
 	go build -o bin/gateway ./cmd/gateway
 
 test:
-	go test ./...
+	go test ./... -v
 
 tidy:
 	go mod tidy
@@ -40,3 +40,7 @@ k8s-down:
 
 k8s-status:
 	kubectl get all -n helmsman
+
+dashboard:
+	@echo "Opening dashboard at http://localhost:8081"
+	@cd dashboard && python3 -m http.server 8081
