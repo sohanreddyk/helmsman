@@ -7,30 +7,36 @@ import (
 )
 
 type Config struct {
-	Addr          string
-	BackendURLs   []string
-	ProbeInterval time.Duration
-	ReadTimeout   time.Duration
-	WriteTimeout  time.Duration
-	IdleTimeout   time.Duration
-	RedisAddr     string
-	RatePerSec    int
-	RateBurst     int
-	MaxConcurrent int
+	Addr             string
+	BackendURLs      []string
+	ProbeInterval    time.Duration
+	ReadTimeout      time.Duration
+	WriteTimeout     time.Duration
+	IdleTimeout      time.Duration
+	RedisAddr        string
+	RatePerSec       int
+	RateBurst        int
+	MaxConcurrent    int
+	EmbedBaseURL     string
+	CacheThreshold   float64
+	CacheEnabled     bool
 }
 
 func Load() Config {
 	return Config{
-		Addr:          getenv("HELMSMAN_ADDR", ":8080"),
-		BackendURLs:   parseList("HELMSMAN_BACKEND_URLS", "http://localhost:11434"),
-		ProbeInterval: 5 * time.Second,
-		ReadTimeout:   15 * time.Second,
-		WriteTimeout:  0,
-		IdleTimeout:   60 * time.Second,
-		RedisAddr:     getenv("HELMSMAN_REDIS_ADDR", "localhost:6379"),
-		RatePerSec:    5,
-		RateBurst:     10,
-		MaxConcurrent: 10,
+		Addr:           getenv("HELMSMAN_ADDR", ":8080"),
+		BackendURLs:    parseList("HELMSMAN_BACKEND_URLS", "http://localhost:11434"),
+		ProbeInterval:  5 * time.Second,
+		ReadTimeout:    15 * time.Second,
+		WriteTimeout:   0,
+		IdleTimeout:    60 * time.Second,
+		RedisAddr:      getenv("HELMSMAN_REDIS_ADDR", "localhost:6379"),
+		RatePerSec:     5,
+		RateBurst:      10,
+		MaxConcurrent:  10,
+		EmbedBaseURL:   getenv("HELMSMAN_EMBED_URL", "http://localhost:11434"),
+		CacheThreshold: 0.95,
+		CacheEnabled:   true,
 	}
 }
 
