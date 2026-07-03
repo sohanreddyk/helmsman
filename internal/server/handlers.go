@@ -4,15 +4,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net/http"
+	"time"
 
 	"github.com/sohanreddy/helmsman/internal/balancer"
 	"github.com/sohanreddy/helmsman/internal/cache"
 	"github.com/sohanreddy/helmsman/internal/proxy"
 	"github.com/sohanreddy/helmsman/internal/registry"
 )
+
+const maxRetries = 3
 
 type Handlers struct {
 	registry *registry.Registry
@@ -53,7 +58,7 @@ func (h *Handlers) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	prompt, stream := extractPrompt(body)
 
-	// Cache lookup (non-streaming only)
+	// Semantic cache lookup (non-streaming only)
 	if !stream && h.cache != nil && prompt != "" {
 		if cached, hit, err := h.cache.Get(r.Context(), prompt); err == nil && hit {
 			h.log.Info("cache hit", "prompt_len", len(prompt))
@@ -65,43 +70,106 @@ func (h *Handlers) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	backend, err := h.balancer.Pick(h.registry.Healthy())
+	// Forward with circuit breaker + retry
+	responseBytes, err := h.forwardWithRetry(r, body, stream)
 	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, `{"error":"no healthy backend available"}`)
+		if errors.Is(err, balancer.ErrNoHealthyBackend) {
+			writeJSON(w, http.StatusServiceUnavailable, `{"error":"no healthy backend available"}`)
+			return
+		}
+		writeJSON(w, http.StatusBadGateway, `{"error":"all backends failed"}`)
 		return
 	}
 
-	h.log.Info("routing request", "backend", backend.URL, "stream", stream)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(responseBytes)
 
-	// Non-streaming: buffer response so we can cache it
+	// Store in cache asynchronously
 	if !stream && h.cache != nil && prompt != "" {
-		buf := &bytes.Buffer{}
-		rw := &bufferingResponseWriter{ResponseWriter: w, buf: buf}
-		if err := h.proxy.Forward(rw, r, backend.URL, "/v1/chat/completions", bytes.NewReader(body)); err != nil {
-			h.log.Error("backend forward failed", "backend", backend.URL, "err", err)
-			writeJSON(w, http.StatusBadGateway, `{"error":"backend unavailable"}`)
-			return
-		}
-		// Use a fresh context — request context is cancelled after handler returns
-		responseBytes := make([]byte, buf.Len())
-		copy(responseBytes, buf.Bytes())
+		respCopy := make([]byte, len(responseBytes))
+		copy(respCopy, responseBytes)
 		go func(p string, resp []byte) {
-			ctx := context.Background()
-			if err := h.cache.Set(ctx, p, resp); err != nil {
+			if err := h.cache.Set(context.Background(), p, resp); err != nil {
 				h.log.Warn("cache set failed", "err", err)
 			} else {
 				h.log.Info("cache stored", "prompt_len", len(p))
 			}
-		}(prompt, responseBytes)
-		return
-	}
-
-	// Streaming or cache disabled: forward directly
-	if err := h.proxy.Forward(w, r, backend.URL, "/v1/chat/completions", bytes.NewReader(body)); err != nil {
-		h.log.Error("backend forward failed", "backend", backend.URL, "err", err)
-		writeJSON(w, http.StatusBadGateway, `{"error":"backend unavailable"}`)
+		}(prompt, respCopy)
 	}
 }
+
+// forwardWithRetry attempts to forward the request, retrying on a different
+// backend on circuit-open or network errors with exponential backoff + jitter.
+func (h *Handlers) forwardWithRetry(r *http.Request, body []byte, stream bool) ([]byte, error) {
+	tried := map[string]bool{}
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		backends := h.registry.Healthy()
+		var candidates []*registry.Backend
+		for _, b := range backends {
+			if !tried[b.URL] {
+				candidates = append(candidates, b)
+			}
+		}
+
+		backend, err := h.balancer.Pick(candidates)
+		if err != nil {
+			return nil, balancer.ErrNoHealthyBackend
+		}
+
+		// Check circuit breaker
+		if err := backend.Breaker.Allow(); err != nil {
+			h.log.Warn("circuit open, skipping backend",
+				"backend", backend.URL,
+				"attempt", attempt+1,
+			)
+			tried[backend.URL] = true
+			continue
+		}
+
+		// Forward into a buffer
+		buf := &bytes.Buffer{}
+		rw := &bufferingResponseWriter{
+			ResponseWriter: &noopResponseWriter{header: make(http.Header)},
+			buf:            buf,
+		}
+
+		forwardErr := h.proxy.Forward(rw, r, backend.URL, "/v1/chat/completions", bytes.NewReader(body))
+		if forwardErr != nil {
+			backend.Breaker.RecordFailure()
+			h.log.Warn("backend failed, will retry",
+				"backend", backend.URL,
+				"attempt", attempt+1,
+				"err", forwardErr,
+				"breaker", backend.Breaker.State(),
+			)
+			tried[backend.URL] = true
+			backoff := time.Duration(attempt+1)*100*time.Millisecond +
+				time.Duration(rand.Intn(50))*time.Millisecond
+			time.Sleep(backoff)
+			continue
+		}
+
+		backend.Breaker.RecordSuccess()
+		h.log.Info("request forwarded",
+			"backend", backend.URL,
+			"attempt", attempt+1,
+			"breaker", backend.Breaker.State(),
+		)
+		return buf.Bytes(), nil
+	}
+
+	return nil, errors.New("all retries exhausted")
+}
+
+type noopResponseWriter struct {
+	header http.Header
+}
+
+func (n *noopResponseWriter) Header() http.Header         { return n.header }
+func (n *noopResponseWriter) Write(b []byte) (int, error) { return len(b), nil }
+func (n *noopResponseWriter) WriteHeader(int)             {}
 
 type bufferingResponseWriter struct {
 	http.ResponseWriter

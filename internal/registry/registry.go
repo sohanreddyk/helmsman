@@ -6,11 +6,14 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/sohanreddy/helmsman/internal/resilience"
 )
 
 type Backend struct {
 	URL     string
 	Healthy bool
+	Breaker *resilience.Breaker
 }
 
 type Registry struct {
@@ -23,7 +26,11 @@ type Registry struct {
 func New(urls []string, log *slog.Logger) *Registry {
 	backends := make([]*Backend, len(urls))
 	for i, u := range urls {
-		backends[i] = &Backend{URL: u, Healthy: true} // optimistic start
+		backends[i] = &Backend{
+			URL:     u,
+			Healthy: true,
+			Breaker: resilience.NewBreaker(3, 30*time.Second),
+		}
 	}
 	return &Registry{
 		backends: backends,
@@ -32,7 +39,7 @@ func New(urls []string, log *slog.Logger) *Registry {
 	}
 }
 
-// Healthy returns all currently healthy backends (snapshot).
+// Healthy returns backends that are both healthy AND have a closed/half-open circuit.
 func (r *Registry) Healthy() []*Backend {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -45,7 +52,7 @@ func (r *Registry) Healthy() []*Backend {
 	return out
 }
 
-// All returns every backend regardless of health (for the stats endpoint later).
+// All returns every backend regardless of health.
 func (r *Registry) All() []*Backend {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -54,8 +61,7 @@ func (r *Registry) All() []*Backend {
 	return out
 }
 
-// StartProbes launches a background goroutine that probes each backend every
-// interval. It stops when ctx is cancelled.
+// StartProbes launches a background goroutine that probes each backend every interval.
 func (r *Registry) StartProbes(ctx context.Context, interval time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
@@ -84,6 +90,7 @@ func (r *Registry) probeAll() {
 			r.log.Info("backend health changed",
 				"url", b.URL,
 				"healthy", healthy,
+				"breaker", b.Breaker.State(),
 			)
 		}
 		b.Healthy = healthy
