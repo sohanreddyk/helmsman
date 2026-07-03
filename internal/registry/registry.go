@@ -39,7 +39,6 @@ func New(urls []string, log *slog.Logger) *Registry {
 	}
 }
 
-// Healthy returns backends that are both healthy AND have a closed/half-open circuit.
 func (r *Registry) Healthy() []*Backend {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -52,7 +51,6 @@ func (r *Registry) Healthy() []*Backend {
 	return out
 }
 
-// All returns every backend regardless of health.
 func (r *Registry) All() []*Backend {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -61,7 +59,6 @@ func (r *Registry) All() []*Backend {
 	return out
 }
 
-// StartProbes launches a background goroutine that probes each backend every interval.
 func (r *Registry) StartProbes(ctx context.Context, interval time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
@@ -77,22 +74,42 @@ func (r *Registry) StartProbes(ctx context.Context, interval time.Duration) {
 	}()
 }
 
+// probeAll checks each backend outside the lock, then locks only to update state.
+// Holding a write lock during HTTP calls would block all request routing for up
+// to the probe timeout — a significant latency spike under load.
 func (r *Registry) probeAll() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, b := range r.backends {
+	// Snapshot URLs without holding the lock
+	r.mu.RLock()
+	backends := make([]*Backend, len(r.backends))
+	copy(backends, r.backends)
+	r.mu.RUnlock()
+
+	type result struct {
+		backend *Backend
+		healthy bool
+	}
+	results := make([]result, len(backends))
+
+	for i, b := range backends {
 		resp, err := r.client.Get(b.URL + "/")
 		healthy := err == nil && resp.StatusCode < 500
 		if resp != nil {
 			resp.Body.Close()
 		}
-		if b.Healthy != healthy {
+		results[i] = result{backend: b, healthy: healthy}
+	}
+
+	// Lock only to write results
+	r.mu.Lock()
+	for _, res := range results {
+		if res.backend.Healthy != res.healthy {
 			r.log.Info("backend health changed",
-				"url", b.URL,
-				"healthy", healthy,
-				"breaker", b.Breaker.State(),
+				"url", res.backend.URL,
+				"healthy", res.healthy,
+				"breaker", res.backend.Breaker.State(),
 			)
 		}
-		b.Healthy = healthy
+		res.backend.Healthy = res.healthy
 	}
+	r.mu.Unlock()
 }

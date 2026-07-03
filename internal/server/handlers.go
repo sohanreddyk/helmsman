@@ -50,7 +50,6 @@ func (h *Handlers) Readyz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, `{"status":"ready"}`)
 }
 
-// Stats returns a JSON snapshot of gateway state for the dashboard.
 func (h *Handlers) Stats(w http.ResponseWriter, r *http.Request) {
 	type backendStat struct {
 		URL     string `json:"url"`
@@ -96,8 +95,14 @@ func (h *Handlers) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	prompt, stream := extractPrompt(body)
 
-	// Semantic cache lookup
-	if !stream && h.cache != nil && prompt != "" {
+	// Streaming: skip cache entirely, forward directly with circuit breaker
+	if stream {
+		h.forwardStream(w, r, body)
+		return
+	}
+
+	// Non-streaming: check semantic cache first
+	if h.cache != nil && prompt != "" {
 		if cached, hit, err := h.cache.Get(r.Context(), prompt); err == nil && hit {
 			h.log.Info("cache hit", "prompt_len", len(prompt))
 			metrics.CacheHits.Inc()
@@ -110,7 +115,8 @@ func (h *Handlers) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		metrics.CacheMisses.Inc()
 	}
 
-	responseBytes, err := h.forwardWithRetry(r, body, stream)
+	// Non-streaming: buffer response for caching
+	responseBytes, err := h.forwardBuffered(r, body)
 	if err != nil {
 		if errors.Is(err, balancer.ErrNoHealthyBackend) {
 			writeJSON(w, http.StatusServiceUnavailable, `{"error":"no healthy backend available"}`)
@@ -124,7 +130,8 @@ func (h *Handlers) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(responseBytes)
 
-	if !stream && h.cache != nil && prompt != "" {
+	// Store in cache asynchronously
+	if h.cache != nil && prompt != "" {
 		respCopy := make([]byte, len(responseBytes))
 		copy(respCopy, responseBytes)
 		go func(p string, resp []byte) {
@@ -137,7 +144,32 @@ func (h *Handlers) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handlers) forwardWithRetry(r *http.Request, body []byte, stream bool) ([]byte, error) {
+// forwardStream picks a backend and streams directly — no buffering.
+// Retries are not possible mid-stream (headers already sent), so we only
+// apply the circuit breaker on the initial pick.
+func (h *Handlers) forwardStream(w http.ResponseWriter, r *http.Request, body []byte) {
+	backend, err := h.pickHealthyBackend()
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, `{"error":"no healthy backend available"}`)
+		return
+	}
+	if err := backend.Breaker.Allow(); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, `{"error":"backend circuit open"}`)
+		return
+	}
+	if err := h.proxy.Forward(w, r, backend.URL, "/v1/chat/completions", bytes.NewReader(body)); err != nil {
+		backend.Breaker.RecordFailure()
+		metrics.BackendFailures.WithLabelValues(backend.URL).Inc()
+		h.log.Error("stream forward failed", "backend", backend.URL, "err", err)
+		return
+	}
+	backend.Breaker.RecordSuccess()
+	metrics.BackendRequests.WithLabelValues(backend.URL).Inc()
+}
+
+// forwardBuffered forwards to a backend, buffers the response, and retries on
+// failure with exponential backoff on a different backend.
+func (h *Handlers) forwardBuffered(r *http.Request, body []byte) ([]byte, error) {
 	tried := map[string]bool{}
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
@@ -156,9 +188,7 @@ func (h *Handlers) forwardWithRetry(r *http.Request, body []byte, stream bool) (
 
 		if err := backend.Breaker.Allow(); err != nil {
 			h.log.Warn("circuit open, skipping backend",
-				"backend", backend.URL,
-				"attempt", attempt+1,
-			)
+				"backend", backend.URL, "attempt", attempt+1)
 			tried[backend.URL] = true
 			continue
 		}
@@ -197,6 +227,10 @@ func (h *Handlers) forwardWithRetry(r *http.Request, body []byte, stream bool) (
 	}
 
 	return nil, errors.New("all retries exhausted")
+}
+
+func (h *Handlers) pickHealthyBackend() (*registry.Backend, error) {
+	return h.balancer.Pick(h.registry.Healthy())
 }
 
 type noopResponseWriter struct {
