@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: helmsman-config
+  namespace: helmsman
+data:
+  HELMSMAN_ADDR: ":8080"
+  HELMSMAN_REDIS_ADDR: "redis:6379"
+  HELMSMAN_BACKEND_URLS: "http://host.docker.internal:11434"
+  HELMSMAN_EMBED_URL: "http://host.docker.internal:11434"

@@ -1,4 +1,4 @@
-.PHONY: run build test tidy fmt vet clean kill
+.PHONY: run build test tidy fmt vet clean kill restart docker-build k8s-up k8s-down k8s-status
 
 run:
 	go run ./cmd/gateway
@@ -25,3 +25,18 @@ kill:
 	-lsof -ti :8080 | xargs kill -9 2>/dev/null || true
 
 restart: kill run
+
+docker-build:
+	docker build -t helmsman:latest .
+
+k8s-up:
+	kubectl apply -f deploy/k8s/namespace.yaml
+	kubectl apply -f deploy/k8s/redis.yaml
+	kubectl apply -f deploy/k8s/configmap.yaml
+	kubectl apply -f deploy/k8s/gateway.yaml
+
+k8s-down:
+	kubectl delete namespace helmsman
+
+k8s-status:
+	kubectl get all -n helmsman
