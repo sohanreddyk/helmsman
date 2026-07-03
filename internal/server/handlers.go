@@ -13,6 +13,7 @@ import (
 
 	"github.com/sohanreddy/helmsman/internal/balancer"
 	"github.com/sohanreddy/helmsman/internal/cache"
+	"github.com/sohanreddy/helmsman/internal/metrics"
 	"github.com/sohanreddy/helmsman/internal/proxy"
 	"github.com/sohanreddy/helmsman/internal/registry"
 )
@@ -49,6 +50,43 @@ func (h *Handlers) Readyz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, `{"status":"ready"}`)
 }
 
+// Stats returns a JSON snapshot of gateway state for the dashboard.
+func (h *Handlers) Stats(w http.ResponseWriter, r *http.Request) {
+	type backendStat struct {
+		URL     string `json:"url"`
+		Healthy bool   `json:"healthy"`
+		Breaker string `json:"breaker"`
+	}
+	var backends []backendStat
+	for _, b := range h.registry.All() {
+		state := b.Breaker.State()
+		var stateNum float64
+		switch state {
+		case "open":
+			stateNum = 1
+		case "half-open":
+			stateNum = 2
+		}
+		metrics.BackendHealthy.WithLabelValues(b.URL).Set(func() float64 {
+			if b.Healthy {
+				return 1
+			}
+			return 0
+		}())
+		metrics.CircuitBreakerState.WithLabelValues(b.URL).Set(stateNum)
+		backends = append(backends, backendStat{
+			URL:     b.URL,
+			Healthy: b.Healthy,
+			Breaker: state,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"backends": backends,
+	})
+}
+
 func (h *Handlers) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
@@ -58,19 +96,20 @@ func (h *Handlers) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	prompt, stream := extractPrompt(body)
 
-	// Semantic cache lookup (non-streaming only)
+	// Semantic cache lookup
 	if !stream && h.cache != nil && prompt != "" {
 		if cached, hit, err := h.cache.Get(r.Context(), prompt); err == nil && hit {
 			h.log.Info("cache hit", "prompt_len", len(prompt))
+			metrics.CacheHits.Inc()
 			w.Header().Set("X-Cache", "HIT")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(cached)
 			return
 		}
+		metrics.CacheMisses.Inc()
 	}
 
-	// Forward with circuit breaker + retry
 	responseBytes, err := h.forwardWithRetry(r, body, stream)
 	if err != nil {
 		if errors.Is(err, balancer.ErrNoHealthyBackend) {
@@ -85,7 +124,6 @@ func (h *Handlers) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(responseBytes)
 
-	// Store in cache asynchronously
 	if !stream && h.cache != nil && prompt != "" {
 		respCopy := make([]byte, len(responseBytes))
 		copy(respCopy, responseBytes)
@@ -99,8 +137,6 @@ func (h *Handlers) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// forwardWithRetry attempts to forward the request, retrying on a different
-// backend on circuit-open or network errors with exponential backoff + jitter.
 func (h *Handlers) forwardWithRetry(r *http.Request, body []byte, stream bool) ([]byte, error) {
 	tried := map[string]bool{}
 
@@ -118,7 +154,6 @@ func (h *Handlers) forwardWithRetry(r *http.Request, body []byte, stream bool) (
 			return nil, balancer.ErrNoHealthyBackend
 		}
 
-		// Check circuit breaker
 		if err := backend.Breaker.Allow(); err != nil {
 			h.log.Warn("circuit open, skipping backend",
 				"backend", backend.URL,
@@ -128,7 +163,6 @@ func (h *Handlers) forwardWithRetry(r *http.Request, body []byte, stream bool) (
 			continue
 		}
 
-		// Forward into a buffer
 		buf := &bytes.Buffer{}
 		rw := &bufferingResponseWriter{
 			ResponseWriter: &noopResponseWriter{header: make(http.Header)},
@@ -138,6 +172,7 @@ func (h *Handlers) forwardWithRetry(r *http.Request, body []byte, stream bool) (
 		forwardErr := h.proxy.Forward(rw, r, backend.URL, "/v1/chat/completions", bytes.NewReader(body))
 		if forwardErr != nil {
 			backend.Breaker.RecordFailure()
+			metrics.BackendFailures.WithLabelValues(backend.URL).Inc()
 			h.log.Warn("backend failed, will retry",
 				"backend", backend.URL,
 				"attempt", attempt+1,
@@ -152,6 +187,7 @@ func (h *Handlers) forwardWithRetry(r *http.Request, body []byte, stream bool) (
 		}
 
 		backend.Breaker.RecordSuccess()
+		metrics.BackendRequests.WithLabelValues(backend.URL).Inc()
 		h.log.Info("request forwarded",
 			"backend", backend.URL,
 			"attempt", attempt+1,

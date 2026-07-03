@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"github.com/sohanreddy/helmsman/internal/balancer"
 	"github.com/sohanreddy/helmsman/internal/cache"
@@ -46,6 +47,8 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", h.Healthz)
 	mux.HandleFunc("GET /readyz", h.Readyz)
+	mux.HandleFunc("GET /stats", h.Stats)
+	mux.Handle("GET /metrics", promhttp.Handler())
 	mux.HandleFunc("POST /v1/chat/completions", h.ChatCompletions)
 
 	handler := chain(mux,

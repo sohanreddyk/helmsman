@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/sohanreddy/helmsman/internal/metrics"
 	"github.com/sohanreddy/helmsman/internal/ratelimit"
 )
 
@@ -56,8 +58,12 @@ func LoggingMiddleware(log *slog.Logger) func(http.Handler) http.Handler {
 			start := time.Now()
 			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rec, r)
+
+			dur := time.Since(start).Seconds()
 			id, _ := r.Context().Value(requestIDKey).(string)
 			key, _ := r.Context().Value(apiKeyCtxKey).(string)
+			status := strconv.Itoa(rec.status)
+
 			log.Info("request",
 				"id", id,
 				"method", r.Method,
@@ -66,6 +72,9 @@ func LoggingMiddleware(log *slog.Logger) func(http.Handler) http.Handler {
 				"dur_ms", time.Since(start).Milliseconds(),
 				"api_key", key,
 			)
+
+			metrics.RequestDuration.WithLabelValues(r.URL.Path, status).Observe(dur)
+			metrics.RequestsTotal.WithLabelValues(r.URL.Path, status).Inc()
 		})
 	}
 }
@@ -84,12 +93,10 @@ func RecoverMiddleware(log *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// AuthMiddleware extracts the Bearer token from the Authorization header.
-// For now any non-empty token is accepted; Phase 5 will validate against Postgres.
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Skip auth for health endpoints
-		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" ||
+			r.URL.Path == "/metrics" || r.URL.Path == "/stats" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -104,7 +111,6 @@ func AuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// RateLimitMiddleware enforces per-key token bucket limits via Redis.
 func RateLimitMiddleware(limiter *ratelimit.Limiter, log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -116,11 +122,11 @@ func RateLimitMiddleware(limiter *ratelimit.Limiter, log *slog.Logger) func(http
 			allowed, err := limiter.Allow(r.Context(), key)
 			if err != nil {
 				log.Error("rate limiter error", "err", err)
-				// Fail open: if Redis is down, let the request through
 				next.ServeHTTP(w, r)
 				return
 			}
 			if !allowed {
+				metrics.RateLimitRejections.Inc()
 				w.Header().Set("Retry-After", "1")
 				writeJSON(w, http.StatusTooManyRequests, `{"error":"rate limit exceeded"}`)
 				return
