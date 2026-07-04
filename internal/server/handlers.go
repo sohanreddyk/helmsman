@@ -247,8 +247,7 @@ type bufferingResponseWriter struct {
 }
 
 func (b *bufferingResponseWriter) Write(p []byte) (int, error) {
-	b.buf.Write(p)
-	return b.ResponseWriter.Write(p)
+	return b.buf.Write(p)
 }
 
 func extractPrompt(body []byte) (prompt string, stream bool) {

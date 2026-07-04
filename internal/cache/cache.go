@@ -15,20 +15,21 @@ import (
 
 const (
 	defaultTTL       = 24 * time.Hour
-	defaultThreshold = 0.95 // cosine similarity threshold for a cache hit
+	defaultThreshold = 0.95
 	embeddingModel   = "nomic-embed-text"
+	indexKey         = "cache:index" // Redis Set tracking all cache keys
 )
 
-// entry is what we store in Redis for each cached prompt.
 type entry struct {
 	Embedding []float64 `json:"embedding"`
 	Response  []byte    `json:"response"`
 }
 
 // SemanticCache embeds prompts and matches near-duplicates by cosine similarity.
+// Keys are tracked in a Redis Set (cache:index) to avoid O(N) KEYS scans.
 type SemanticCache struct {
 	rdb          *redis.Client
-	embedBaseURL string // Ollama base URL for embeddings
+	embedBaseURL string
 	threshold    float64
 	ttl          time.Duration
 	httpClient   *http.Client
@@ -45,14 +46,14 @@ func New(rdb *redis.Client, embedBaseURL string, threshold float64) *SemanticCac
 }
 
 // Get checks for a semantically similar cached response.
-// Returns the cached response bytes and true on a hit, nil and false on a miss.
 func (c *SemanticCache) Get(ctx context.Context, prompt string) ([]byte, bool, error) {
 	queryVec, err := c.embed(ctx, prompt)
 	if err != nil {
 		return nil, false, fmt.Errorf("embed query: %w", err)
 	}
 
-	keys, err := c.rdb.Keys(ctx, "cache:*").Result()
+	// Use SMEMBERS on the index set — O(N) on the set size, not on all Redis keys
+	keys, err := c.rdb.SMembers(ctx, indexKey).Result()
 	if err != nil || len(keys) == 0 {
 		return nil, false, nil
 	}
@@ -63,6 +64,8 @@ func (c *SemanticCache) Get(ctx context.Context, prompt string) ([]byte, bool, e
 	for _, key := range keys {
 		raw, err := c.rdb.Get(ctx, key).Bytes()
 		if err != nil {
+			// Key expired — clean up the index
+			c.rdb.SRem(ctx, indexKey, key)
 			continue
 		}
 		var e entry
@@ -96,10 +99,14 @@ func (c *SemanticCache) Set(ctx context.Context, prompt string, response []byte)
 	}
 
 	key := fmt.Sprintf("cache:%x", sha256.Sum256([]byte(prompt)))
-	return c.rdb.Set(ctx, key, raw, c.ttl).Err()
+
+	pipe := c.rdb.Pipeline()
+	pipe.Set(ctx, key, raw, c.ttl)
+	pipe.SAdd(ctx, indexKey, key)
+	_, err = pipe.Exec(ctx)
+	return err
 }
 
-// embed calls the Ollama embeddings API and returns the vector.
 func (c *SemanticCache) embed(ctx context.Context, text string) ([]float64, error) {
 	payload, _ := json.Marshal(map[string]string{
 		"model":  embeddingModel,
@@ -131,8 +138,6 @@ func (c *SemanticCache) embed(ctx context.Context, text string) ([]float64, erro
 	return result.Embedding, nil
 }
 
-// cosineSimilarity computes the cosine similarity between two vectors.
-// Returns a value in [-1, 1]; 1.0 means identical direction.
 func cosineSimilarity(a, b []float64) float64 {
 	if len(a) != len(b) || len(a) == 0 {
 		return 0
