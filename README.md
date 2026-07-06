@@ -182,7 +182,7 @@ go test ./...
 
 Covers: cosine similarity correctness, circuit breaker state machine (all
 transitions), round-robin distribution, semaphore backpressure + health endpoint
-bypass.
+bypass
 
 ---
 
